@@ -64,7 +64,7 @@ void accelerate_paddle(Paddle& paddle, int direction, double dt, const Settings&
 
     if (abs(paddle.velocity) == settings.paddle_speed && sign(paddle.velocity) == direction) return;
 
-    constexpr double acceleration = 10.0;
+    constexpr double acceleration = 100.0;
     const double new_velocity = paddle.velocity + direction * acceleration * dt;
 
     paddle.velocity = (abs(new_velocity) < settings.paddle_speed) ? new_velocity : settings.paddle_speed * direction;
@@ -74,10 +74,17 @@ void decelerate_paddle(Paddle& paddle, double dt)
 {
     if (paddle.velocity == 0) return;
 
-    constexpr double deceleration = 10.0;
+    constexpr double deceleration = 100.0;
     const double new_velocity = abs(paddle.velocity) - deceleration * dt;
 
     paddle.velocity = std::max(0.0, new_velocity) * sign(paddle.velocity);
+}
+
+bool paddle_can_move(const Paddle& p, int direction, const Settings& settings)
+{
+    if (p.position <= 0 && direction == -1) return false;
+    else if (p.position >= 1 - settings.paddle_height && direction == +1) return false;
+    return true;
 }
 
 void handle_keypress(Game& game, double dt, const Settings& settings)
@@ -119,8 +126,8 @@ std::vector<std::unique_ptr<sf::Shape>> create_game_shapes(const Game& game, con
 
     {
         auto left_paddle_shape = std::make_unique<sf::RectangleShape>(sf::Vector2f(
-            settings.paddle_width * settings.window_width,
-            settings.paddle_height * settings.window_height
+            settings.paddle_width * (1 - 2 * settings.margin_h) * settings.window_width,
+            settings.paddle_height * (1 - 2 * settings.margin_v) * settings.window_height
         ));
 
         auto right_paddle_shape = std::make_unique<sf::RectangleShape>(*left_paddle_shape);
@@ -140,12 +147,19 @@ std::vector<std::unique_ptr<sf::Shape>> create_game_shapes(const Game& game, con
     return shapes;
 };
 
-Game reset_game(const Settings& settings, Score score = { 0, 0 })
+Game reset_game(const Settings& settings, Score score = { 0, 0 }, bool left_start = false)
 { 
+    const auto offset = settings.ball_radius + settings.margin_h + settings.paddle_width;
+    Ball ball = left_start 
+        ? Ball { settings.ball_radius, { 0 + offset, 0.5 }, { settings.ball_speed, 0 } } 
+        : Ball { settings.ball_radius, { 1 - offset, 0.5 }, { -settings.ball_speed, 0 } };
+
     return { 
-        { Paddle { settings.paddle_height, 0.5 - settings.paddle_height / 2, 0 }, Paddle { settings.paddle_height, 0.5 - settings.paddle_height / 2, 0 } },
-        Ball { settings.ball_radius, { 0.5, 0.5 }, { settings.ball_speed, 0 } },
-        score
+        { 
+            Paddle { settings.paddle_height, 0.5 - settings.paddle_height / 2, 0 },
+            Paddle { settings.paddle_height, 0.5 - settings.paddle_height / 2, 0 } 
+        },
+        ball, score
     };
 }
 
@@ -167,56 +181,67 @@ void perform_ball_collisions(Game& game, const Settings& settings)
         game.ball.position.y() = game.ball.radius;
     }
 
-    if (game.ball.position.x() + game.ball.radius > 1 - settings.paddle_width)
+    if (need_to_wrap)
     {
-        if (game.ball.position.y() + game.ball.radius < game.paddles.second.position ||
-                game.ball.position.y() - game.ball.radius > game.paddles.second.position
-                + game.paddles.second.height)
-        {
-            game.score.left++;
-            game = reset_game(settings, game.score);
-            return;
-        } 
-        else
-        {
-            need_to_wrap = true;
-            unit_normal += eig::Vector2d { -1, 0 };
-            game.ball.position.x() = 1 - settings.paddle_width - game.ball.radius;
-        }
+        unit_normal.normalize();
+        game.ball.velocity = (game.ball.velocity - 2 * (game.ball.velocity.dot(unit_normal)) * unit_normal);
+    }
+
+    constexpr double bounce_buffer = 0.01;
+    constexpr double max_bounce_angle = 5 * M_PI / 12;
+
+    const bool left_win = game.ball.position.y() + game.ball.radius + bounce_buffer < game.paddles.second.position ||
+                game.ball.position.y() - game.ball.radius - bounce_buffer > game.paddles.second.position
+                + game.paddles.second.height;
+
+    const bool right_win = game.ball.position.y() + game.ball.radius + bounce_buffer < game.paddles.first.position ||
+                game.ball.position.y() - game.ball.radius - bounce_buffer > game.paddles.first.position
+                + game.paddles.first.height;
+
+
+    if (game.ball.position.x() + game.ball.radius >= 1 - settings.paddle_width && !left_win)
+    {
+        game.ball.position.x() = 1 - settings.paddle_width - game.ball.radius;
+
+        const auto relative_isct_y = ((game.paddles.second.position + (game.paddles.second.height) / 2) - game.ball.position.y()) / ((game.paddles.second.height) / 2);
+        const auto bounce_angle = relative_isct_y * max_bounce_angle;
+        game.ball.velocity = eig::Rotation2Dd(bounce_angle).toRotationMatrix() * eig::Vector2d(-1, 0) * settings.ball_speed;
     } 
-    else if (game.ball.position.x() - game.ball.radius < settings.paddle_width)
+    else if (game.ball.position.x() - game.ball.radius <= settings.paddle_width && !right_win)
     {
-        if (game.ball.position.y() + game.ball.radius < game.paddles.first.position ||
-                game.ball.position.y() - game.ball.radius > game.paddles.first.position
-                + game.paddles.first.height)
-        {
-            game.score.right++;
-            game = reset_game(settings, game.score);
-            return;
-        } 
-        else
-        {
-            need_to_wrap = true;
-            unit_normal += eig::Vector2d { 1, 0 };
-            game.ball.position.x() = 1 - settings.paddle_width - game.ball.radius;
-            game.ball.position.x() = settings.paddle_width + game.ball.radius;
-        }
+        game.ball.position.x() = settings.paddle_width + game.ball.radius;
+
+        const auto relative_isct_y = ((game.paddles.first.position + (game.paddles.first.height) / 2) - game.ball.position.y()) / ((game.paddles.first.height) / 2);
+        const auto bounce_angle = relative_isct_y * max_bounce_angle;
+        game.ball.velocity = eig::Rotation2Dd(-bounce_angle).toRotationMatrix() * eig::Vector2d(1, 0) * settings.ball_speed;
     } 
 
-    if (!need_to_wrap) return;
-
-    unit_normal.normalize();
-    game.ball.velocity = (game.ball.velocity - 2 * (game.ball.velocity.dot(unit_normal)) * unit_normal);
+    if (game.ball.position.x() + game.ball.radius >= 1)
+    {
+        game.score.left++;
+        game = reset_game(settings, game.score, true);
+    }
+    else if (game.ball.position.x() - game.ball.radius <= 0)
+    {
+        game.score.right++;
+        game = reset_game(settings, game.score, false);
+    }
 }
 
 void loop_game(Game& game, double dt, const Settings& settings)
 {
-    handle_keypress(game, dt, settings);
 
     game.ball.position += game.ball.velocity * dt;
 
+    handle_keypress(game, dt, settings);
+
     auto update_position = [&](Paddle& p) {
-        p.position = std::clamp<double>(p.position + p.velocity * dt, 0, 1 - settings.paddle_height);
+        int direction = sign(p.velocity);
+        if (paddle_can_move(p, direction, settings))
+            p.position = p.position + p.velocity * dt;
+
+        else if (direction == -1) p.position = 0;
+        else if (direction == +1) p.position = 1 - settings.paddle_height;
     };
 
     update_position(game.paddles.first);
@@ -230,16 +255,29 @@ sf::Text create_score_text(const Game& game, const Settings& settings)
     sf::Text text;
 
     text.setFont(settings.font);
-    text.setString(std::to_string(game.score.left) + " – " + std::to_string(game.score.right));
+    text.setString(std::to_string(game.score.left) + " - " + std::to_string(game.score.right));
     text.setFillColor(settings.color);
 
     sf::FloatRect text_rect = text.getLocalBounds();
     text.setOrigin(text_rect.left + text_rect.width / 2,
                    text_rect.top  + text_rect.height / 2);
 
-    text.setPosition(settings.window_width / 2, settings.margin_v * settings.window_height);
+    text.setPosition(settings.window_width / 2, (settings.margin_v + 0.05) * settings.window_height);
 
     return text;
+}
+
+sf::RectangleShape create_border(const Settings& settings)
+{
+    sf::RectangleShape border(sf::Vector2f(
+            (1 - 2 * settings.margin_h) * settings.window_width,
+            (1 - 2 * settings.margin_v) * settings.window_height
+            ));
+    border.setFillColor(sf::Color::Transparent);
+    border.setOutlineThickness(0.0001 * settings.window_width);
+    border.setOutlineColor(settings.color);
+    border.setPosition(settings.margin_h * settings.window_width, settings.margin_v * settings.window_height);
+    return border;
 }
 
 int main(int argc, char *argv[])
@@ -267,8 +305,8 @@ int main(int argc, char *argv[])
     settings.margin_v = 0.05;
     settings.margin_h = 0.05;
 
-    settings.paddle_speed = 1.0;
-    settings.ball_speed = 1.0;
+    settings.paddle_speed = 1.75;
+    settings.ball_speed = 0.8;
     settings.ball_radius = 0.01;
     settings.color = sf::Color::White;
 
@@ -307,11 +345,11 @@ int main(int argc, char *argv[])
             }
         }
 
-        window.clear(sf::Color::Black);
-
         const double dt = delta_time.asSeconds();
-
         loop_game(game, dt, settings);
+
+        window.clear(sf::Color::Black);
+        window.draw(create_border(settings));
 
         for (auto& shape : create_game_shapes(game, settings)) { window.draw(*shape); }
 
