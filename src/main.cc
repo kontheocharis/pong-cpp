@@ -8,7 +8,7 @@
 
 namespace eig = Eigen;
 
-struct Settings
+struct Settings // TODO: set defaults here instead of in main()
 {
     int window_width, window_height;
     double paddle_speed;
@@ -106,7 +106,8 @@ void handle_keypress(Game& game, double dt, const Settings& settings)
     else if (sf::Keyboard::isKeyPressed(Keymap::RightUp))
     {
         accelerate_paddle(game.paddles.second, -1, dt, settings);
-    } else decelerate_paddle(game.paddles.second, dt);
+    } 
+    else decelerate_paddle(game.paddles.second, dt);
 }
 
 std::vector<std::unique_ptr<sf::Shape>> create_game_shapes(const Game& game, const Settings& settings)
@@ -188,22 +189,21 @@ void perform_ball_collisions(Game& game, const Settings& settings)
     }
 
     constexpr double bounce_buffer = 0.01;
-    constexpr double max_bounce_angle = 5 * M_PI / 12;
+    constexpr double max_bounce_angle = M_PI / 6;
 
-    const bool left_win = game.ball.position.y() + game.ball.radius + bounce_buffer < game.paddles.second.position ||
-                game.ball.position.y() - game.ball.radius - bounce_buffer > game.paddles.second.position
-                + game.paddles.second.height;
+    const bool left_win = game.ball.position.y() + game.ball.radius + bounce_buffer < game.paddles.second.position 
+        || game.ball.position.y() - game.ball.radius - bounce_buffer > game.paddles.second.position + game.paddles.second.height;
 
-    const bool right_win = game.ball.position.y() + game.ball.radius + bounce_buffer < game.paddles.first.position ||
-                game.ball.position.y() - game.ball.radius - bounce_buffer > game.paddles.first.position
-                + game.paddles.first.height;
-
+    const bool right_win = game.ball.position.y() + game.ball.radius + bounce_buffer < game.paddles.first.position 
+        || game.ball.position.y() - game.ball.radius - bounce_buffer > game.paddles.first.position + game.paddles.first.height;
 
     if (game.ball.position.x() + game.ball.radius >= 1 - settings.paddle_width && !left_win)
     {
         game.ball.position.x() = 1 - settings.paddle_width - game.ball.radius;
 
-        const auto relative_isct_y = ((game.paddles.second.position + (game.paddles.second.height) / 2) - game.ball.position.y()) / ((game.paddles.second.height) / 2);
+        const auto relative_isct_y = ((game.paddles.second.position + (game.paddles.second.height) / 2) - game.ball.position.y())
+            / ((game.paddles.second.height) / 2);
+
         const auto bounce_angle = relative_isct_y * max_bounce_angle;
         game.ball.velocity = eig::Rotation2Dd(bounce_angle).toRotationMatrix() * eig::Vector2d(-1, 0) * settings.ball_speed;
     } 
@@ -211,7 +211,9 @@ void perform_ball_collisions(Game& game, const Settings& settings)
     {
         game.ball.position.x() = settings.paddle_width + game.ball.radius;
 
-        const auto relative_isct_y = ((game.paddles.first.position + (game.paddles.first.height) / 2) - game.ball.position.y()) / ((game.paddles.first.height) / 2);
+        const auto relative_isct_y = ((game.paddles.first.position + (game.paddles.first.height) / 2) - game.ball.position.y()) 
+            / ((game.paddles.first.height) / 2);
+
         const auto bounce_angle = relative_isct_y * max_bounce_angle;
         game.ball.velocity = eig::Rotation2Dd(-bounce_angle).toRotationMatrix() * eig::Vector2d(1, 0) * settings.ball_speed;
     } 
